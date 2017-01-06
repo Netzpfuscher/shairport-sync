@@ -76,6 +76,7 @@ typedef struct {
                           // behaviour; only set by -t 0, cleared by everything else
   char *output_name;
   audio_output *output;
+  char *output_device;
   char *mdns_name;
   mdns_backend *mdns;
   int buffer_start_fill;

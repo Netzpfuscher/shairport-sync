@@ -174,6 +174,7 @@ static int init(int argc, char **argv) {
     /* Get the Output Device Name. */
     if (config_lookup_string(config.cfg, "alsa.output_device", &str)) {
       alsa_out_dev = (char *)str;
+      config.output_device = alsa_out_dev;
     }
 
     /* Get the Mixer Type setting. */
@@ -252,6 +253,7 @@ static int init(int argc, char **argv) {
     switch (opt) {
     case 'd':
       alsa_out_dev = optarg;
+      config.output_device = alsa_out_dev;
       break;
 
     case 't':

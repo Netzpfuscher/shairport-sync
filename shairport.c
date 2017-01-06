@@ -61,6 +61,11 @@
 #include <libdaemon/dpid.h>
 #include <libdaemon/dexec.h>
 
+#define C_TOPIC "\033[32m\033[1m"
+#define C_RED "\033[31m"
+#define C_DEF "\033[0m"
+#define C_BOLD "\033[1m"
+
 static int shutting_down = 0;
 static char *appName = NULL;
 char configuration_file_path[4096+1];
@@ -1056,13 +1061,13 @@ int main(int argc, char **argv) {
 #ifdef CONFIG_METADATA
   metadata_init(); // create the metadata pipe if necessary
 #endif
-  daemon_log(LOG_INFO,"Successful Startup");
+  daemon_log(LOG_INFO,C_TOPIC "Shairport: " C_DEF "Instance -%s- with ALSA device -%s- succesfully started",config.service_name,config.output_device);
   rtsp_listen_loop();
 
   // should not reach this...
   shairport_shutdown();
 finish:
-  daemon_log(LOG_NOTICE, "Unexpected exit...");
+  daemon_log(LOG_NOTICE,C_TOPIC "Shairport: " C_DEF "Unexpected exit of instance -%s-", config.service_name);
   daemon_retval_send(255);
   daemon_pid_file_remove();
   return 1;
