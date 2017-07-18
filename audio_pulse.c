@@ -28,14 +28,14 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "audio.h"
+#include "common.h"
+#include <memory.h>
+#include <pulse/def.h>
+#include <pulse/error.h>
+#include <pulse/simple.h>
 #include <stdio.h>
 #include <unistd.h>
-#include <memory.h>
-#include <pulse/simple.h>
-#include <pulse/error.h>
-#include <pulse/def.h>
-#include "common.h"
-#include "audio.h"
 
 static pa_simple *pa_dev = NULL;
 
@@ -60,7 +60,7 @@ static int init(int argc, char **argv) {
 
   pulse_options.service_name = config.service_name;
 
-  config.audio_backend_buffer_desired_length = 44100; // one second.
+  config.audio_backend_buffer_desired_length = 1; // one second.
   config.audio_backend_latency_offset = 0;
 
   optind = 1; // optind=0 is equivalent to optind=1 plus special behaviour
@@ -110,9 +110,8 @@ static void deinit(void) {
   pa_dev = NULL;
 }
 
-static void start(int sample_rate) {
-  if (sample_rate != 44100)
-    die("unexpected sample rate!");
+static void start(int sample_rate, int sample_format) {
+// unused information
 }
 
 static void play(short buf[], int samples) {
