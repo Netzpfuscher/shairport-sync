@@ -63,7 +63,7 @@ void mdns_register(void) {
   char *p = mdns_service_name;
   int i;
   for (i = 0; i < 6; i++) {
-    sprintf(p, "%02X", config.hw_addr[i]);
+    snprintf(p, 3, "%02X", config.hw_addr[i]);
     p += 2;
   }
   *p++ = '@';
@@ -104,6 +104,26 @@ void mdns_unregister(void) {
   }
 }
 
+void *mdns_dacp_monitor(char *dacp_id) {
+  void *reply = NULL;
+  if ((dacp_id != NULL) && (*dacp_id != '\0')) {
+    if ((config.mdns) && (config.mdns->mdns_dacp_monitor)) {
+      reply = config.mdns->mdns_dacp_monitor(dacp_id);
+      if (reply == NULL) {
+        debug(1, "Error starting a DACP monitor.");
+      }
+    } else
+      debug(3, "Can't start a DACP monitor -- none registered.");
+  }
+  return reply;
+}
+
+void mdns_dacp_dont_monitor(void *userdata) {
+  if ((config.mdns) && (config.mdns->mdns_dacp_dont_monitor)) {
+    config.mdns->mdns_dacp_dont_monitor(userdata);
+  } else
+    debug(3, "Can't stop a DACP monitor -- none registered.");
+}
 void mdns_ls_backends(void) {
   mdns_backend **b = NULL;
   printf("Available mDNS backends: \n");

@@ -4,9 +4,15 @@ The installation and setup of Shairport Sync is straightforward on recent Linux 
 
 In this brief document will be listed some problems and some solutions, some provided by other users.
 
-Before starting, ensure that your software is up-to-date. 
+1. Before starting, ensure that your software is up-to-date.
+2. Set the `interpolation` in the `general` section of the configuration file to `basic` as the `soxr` setting can cause lower-powered devices to bog down at critical times, e.g. see [this report](https://github.com/mikebrady/shairport-sync/issues/631#issuecomment-366305203).
+
 
 ### WiFi adapter running in power-saving / low-power mode
+
+**Check Throughput**
+
+ You can check WiFi throughput using, for example, https://thepi.io/how-to-use-your-raspberry-pi-to-monitor-broadband-speed/
 
 **Problem**
 
@@ -30,7 +36,26 @@ wireless-power off
 ```
 to the file `/etc/network/interfaces`.
 
+Here is another option, suggested by [davidhq](https://github.com/davidhq) in [#653](https://github.com/mikebrady/shairport-sync/issues/653#issuecomment-391100620):
+
+```
+$ sudo nano /etc/network/if-up.d/off-power-manager
+```
+
+Type:
+```
+#!/bin/sh
+/sbin/iwconfig wlan0 power off
+```
+Then:
+```
+sudo chmod +x /etc/network/if-up.d/off-power-manager
+```
+
 There are some more details in some the closed issues on this repository.
+
+### Faulty WiFi
+For an example of what it can take to track down a bad WiFi situation – in this case, a faulty WiFi adapter – please look at [this report](https://github.com/mikebrady/shairport-sync/issues/689).
 
 ### Can't play from iTunes on Windows
 
@@ -77,6 +102,57 @@ You may have to change the IP addresses range depending on your own local networ
 You can check UFW config by typing `sudo ufw status` in shell. Please make sure that UFW is active, especially if you have deactivated it previously for testing purpose.
 
 Run your song from your remote device. Enjoy !
+
+### Shairport Sync Won't Start Automatically After Reboot
+This refers to slower machines, such as the Raspberry Pi Zero or the original (single core) Raspberry Pi, running a recent Linux that uses `systemd`.
+
+**Problem**
+
+Having compiled Shairport Sync properly using the README guide, and having completed the `make install` step, and having enabled startup on reboot using `$ sudo systemctl enable shairport-sync`, Shairport Sync will start manually upon entering `$sudo systemctl enable shairport-sync`, but it will not start automatically after a reboot.
+
+**Possible Cause**
+
+On lower-powered machines, such as the Raspberry Pi Zero or the original (single core) Raspberry Pi, particularly with a USB sound card, it may be that the sound system is not ready when Shairport Sync is automatically started. The result is that Shairport Sync cannot see the device it needs and shuts down.
+
+**Possible Solution**
+
+A good solution is to delay the automatic startup of Shairport Sync by a few seconds using the `systemd` timer mechanism:
+
+Create a file called `shairport-sync.timer` and place it alongside `shairport-sync.service` in `/lib/systemd/system`. The file should contain the following:
+```
+[Unit]
+Description=Shairport Sync AirPlay receiver
+
+[Timer]                       
+OnBootSec=10s              
+Unit=shairport-sync.service
+
+[Install]    
+WantedBy=multi-user.target  
+```
+You need to disable the `shairport-sync` service because the timer is calling the service, and you need to enable the `shairport-sync` timer:
+
+```
+# systemctl disable shairport-sync
+# systemctl start shairport-sync.timer
+# systemctl enable shairport-sync.timer
+```
+See also #179, with thanks to @maumi and others.
+
+**Alternative Solution**
+
+- Edit Shairport Sync service file `sudo nano /lib/systemd/system/shairport-sync.service`
+- Update the service section to include the line `ExecStartPre=/bin/sleep 5`
+
+Example:
+
+```
+[Service]
+ExecStartPre=/bin/sleep 5
+ExecStart=/usr/local/bin/shairport-sync
+User=pi
+Group=pi
+```
 
 ### Stuttering audio on certain USB DACs (such as the Creative Soundblaster MP3+)
 

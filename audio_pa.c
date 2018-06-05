@@ -1,9 +1,34 @@
+/*
+ * Asynchronous PulseAudio Backend. This file is part of Shairport Sync.
+ * Copyright (c) Mike Brady 2017
+ * All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person
+ * obtaining a copy of this software and associated documentation
+ * files (the "Software"), to deal in the Software without
+ * restriction, including without limitation the rights to use,
+ * copy, modify, merge, publish, distribute, sublicense, and/or
+ * sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+ * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+ * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+ * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 // Based (distantly, with thanks) on
 // http://stackoverflow.com/questions/29977651/how-can-the-pulseaudio-asynchronous-library-be-used-to-play-raw-pcm-data
 
 #include "audio.h"
 #include "common.h"
-#include <assert.h>
 #include <errno.h>
 #include <pthread.h>
 #include <pulse/pulseaudio.h>
@@ -20,11 +45,13 @@
 
 static pthread_mutex_t buffer_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+/*
 static struct {
   char *server;
   char *sink;
   char *service_name;
 } pulse_options = {.server = NULL, .sink = NULL, .service_name = NULL};
+*/
 
 pa_threaded_mainloop *mainloop;
 pa_mainloop_api *mainloop_api;
@@ -39,7 +66,7 @@ void stream_state_cb(pa_stream *s, void *mainloop);
 void stream_success_cb(pa_stream *stream, int success, void *userdata);
 void stream_write_cb(pa_stream *stream, size_t requested_bytes, void *userdata);
 
-static int init(int argc, char **argv) {
+static int init(__attribute__((unused)) int argc, __attribute__((unused)) char **argv) {
 
   // set up default values first
   config.audio_backend_buffer_desired_length = 0.35;
@@ -72,14 +99,15 @@ static int init(int argc, char **argv) {
 
   // Get a mainloop and its context
   mainloop = pa_threaded_mainloop_new();
-  assert(mainloop);
+  if (mainloop == NULL)
+    die("could not create a pa_threaded_mainloop.");
   mainloop_api = pa_threaded_mainloop_get_api(mainloop);
   if (config.pa_application_name)
     context = pa_context_new(mainloop_api, config.pa_application_name);
   else
     context = pa_context_new(mainloop_api, "Shairport Sync");
-  assert(context);
-
+  if (context == NULL)
+    die("could not create a new context for pulseaudio.");
   // Set a callback so we can wait for the context to be ready
   pa_context_set_state_callback(context, &context_state_cb, mainloop);
 
@@ -87,13 +115,18 @@ static int init(int argc, char **argv) {
   pa_threaded_mainloop_lock(mainloop);
 
   // Start the mainloop
-  assert(pa_threaded_mainloop_start(mainloop) == 0);
-  assert(pa_context_connect(context, NULL, PA_CONTEXT_NOAUTOSPAWN, NULL) == 0);
+  if (pa_threaded_mainloop_start(mainloop) != 0)
+    die("could not start the pulseaudio threaded mainloop");
+  if (pa_context_connect(context, NULL, 0, NULL) != 0)
+    die("failed to connect to the pulseaudio context -- the error message is \"%s\".",
+        pa_strerror(pa_context_errno(context)));
 
   // Wait for the context to be ready
   for (;;) {
     pa_context_state_t context_state = pa_context_get_state(context);
-    assert(PA_CONTEXT_IS_GOOD(context_state));
+    if (!PA_CONTEXT_IS_GOOD(context_state))
+      die("pa context is not good -- the error message \"%s\".",
+          pa_strerror(pa_context_errno(context)));
     if (context_state == PA_CONTEXT_READY)
       break;
     pa_threaded_mainloop_wait(mainloop);
@@ -111,7 +144,8 @@ static void deinit(void) {
   // debug(1, "pa deinit done");
 }
 
-static void start(int sample_rate, int sample_format) {
+static void start(__attribute__((unused)) int sample_rate,
+                  __attribute__((unused)) int sample_format) {
 
   uint32_t buffer_size_in_bytes = (uint32_t)2 * 2 * RATE * 0.1; // hard wired in here
   // debug(1, "pa_buffer size is %u bytes.", buffer_size_in_bytes);
@@ -145,12 +179,17 @@ static void start(int sample_rate, int sample_format) {
                  PA_STREAM_AUTO_TIMING_UPDATE | PA_STREAM_ADJUST_LATENCY;
 
   // Connect stream to the default audio output sink
-  assert(pa_stream_connect_playback(stream, NULL, &buffer_attr, stream_flags, NULL, NULL) == 0);
+  if (pa_stream_connect_playback(stream, NULL, &buffer_attr, stream_flags, NULL, NULL) != 0)
+    die("could not connect to the pulseaudio playback stream -- the error message is \"%s\".",
+        pa_strerror(pa_context_errno(context)));
 
   // Wait for the stream to be ready
   for (;;) {
     pa_stream_state_t stream_state = pa_stream_get_state(stream);
-    assert(PA_STREAM_IS_GOOD(stream_state));
+    if (!PA_STREAM_IS_GOOD(stream_state))
+      die("stream state is no longer good while waiting for stream to become ready -- the error "
+          "message is \"%s\".",
+          pa_strerror(pa_context_errno(context)));
     if (stream_state == PA_STREAM_READY)
       break;
     pa_threaded_mainloop_wait(mainloop);
@@ -159,22 +198,21 @@ static void start(int sample_rate, int sample_format) {
   pa_threaded_mainloop_unlock(mainloop);
 }
 
-static void play(short buf[], int samples) {
+static void play(void *buf, int samples) {
   // debug(1,"pa_play of %d samples.",samples);
-  char *bbuf = (char *)buf;
   // copy the samples into the queue
   size_t bytes_to_transfer = samples * 2 * 2;
   size_t space_to_end_of_buffer = audio_umb - audio_eoq;
   if (space_to_end_of_buffer >= bytes_to_transfer) {
-    memcpy(audio_eoq, bbuf, bytes_to_transfer);
+    memcpy(audio_eoq, buf, bytes_to_transfer);
     audio_occupancy += bytes_to_transfer;
     pthread_mutex_lock(&buffer_mutex);
     audio_eoq += bytes_to_transfer;
     pthread_mutex_unlock(&buffer_mutex);
   } else {
-    memcpy(audio_eoq, bbuf, space_to_end_of_buffer);
-    bbuf += space_to_end_of_buffer;
-    memcpy(audio_lmb, bbuf, bytes_to_transfer - space_to_end_of_buffer);
+    memcpy(audio_eoq, buf, space_to_end_of_buffer);
+    buf += space_to_end_of_buffer;
+    memcpy(audio_lmb, buf, bytes_to_transfer - space_to_end_of_buffer);
     pthread_mutex_lock(&buffer_mutex);
     audio_occupancy += bytes_to_transfer;
     pthread_mutex_unlock(&buffer_mutex);
@@ -256,13 +294,16 @@ audio_output audio_pa = {.name = "pa",
                          .parameters = NULL,
                          .mute = NULL};
 
-void context_state_cb(pa_context *context, void *mainloop) {
+void context_state_cb(__attribute__((unused)) pa_context *context, void *mainloop) {
   pa_threaded_mainloop_signal(mainloop, 0);
 }
 
-void stream_state_cb(pa_stream *s, void *mainloop) { pa_threaded_mainloop_signal(mainloop, 0); }
+void stream_state_cb(__attribute__((unused)) pa_stream *s, void *mainloop) {
+  pa_threaded_mainloop_signal(mainloop, 0);
+}
 
-void stream_write_cb(pa_stream *stream, size_t requested_bytes, void *userdata) {
+void stream_write_cb(pa_stream *stream, size_t requested_bytes,
+                     __attribute__((unused)) void *userdata) {
 
   /*
     // play with timing information
@@ -310,7 +351,7 @@ void stream_write_cb(pa_stream *stream, size_t requested_bytes, void *userdata) 
     // bytes we can transfer will never be greater than the bytes available
 
     pa_stream_begin_write(stream, (void **)&buffer, &bytes_we_can_transfer);
-    if (bytes_we_can_transfer <= (audio_umb - audio_toq)) {
+    if (bytes_we_can_transfer <= (size_t)(audio_umb - audio_toq)) {
       // the bytes are all in a row in the audo buffer
       memcpy(buffer, audio_toq, bytes_we_can_transfer);
       audio_toq += bytes_we_can_transfer;
@@ -326,7 +367,7 @@ void stream_write_cb(pa_stream *stream, size_t requested_bytes, void *userdata) 
       size_t first_portion_to_write = audio_umb - audio_toq;
       if (first_portion_to_write != 0)
         memcpy(buffer, audio_toq, first_portion_to_write);
-      char *new_buffer = buffer + first_portion_to_write;
+      uint8_t *new_buffer = buffer + first_portion_to_write;
       memcpy(new_buffer, audio_lmb, bytes_we_can_transfer - first_portion_to_write);
       pa_stream_write(stream, buffer, bytes_we_can_transfer, NULL, 0LL, PA_SEEK_RELATIVE);
       bytes_transferred += bytes_we_can_transfer;
@@ -345,9 +386,10 @@ void stream_write_cb(pa_stream *stream, size_t requested_bytes, void *userdata) 
   // %d.",requested_bytes/4,bytes_transferred/4,pa_stream_is_corked(stream));
 }
 
-void alt_stream_write_cb(pa_stream *stream, size_t requested_bytes, void *userdata) {
+void alt_stream_write_cb(pa_stream *stream, size_t requested_bytes,
+                         __attribute__((unused)) void *userdata) {
   // debug(1, "***Bytes requested bytes %d.", requested_bytes);
-  int bytes_remaining = requested_bytes;
+  size_t bytes_remaining = requested_bytes;
   while (bytes_remaining > 0) {
     uint8_t *buffer = NULL;
     size_t bytes_to_fill = 44100;
@@ -372,4 +414,8 @@ void alt_stream_write_cb(pa_stream *stream, size_t requested_bytes, void *userda
   }
 }
 
-void stream_success_cb(pa_stream *stream, int success, void *userdata) { return; }
+void stream_success_cb(__attribute__((unused)) pa_stream *stream,
+                       __attribute__((unused)) int success,
+                       __attribute__((unused)) void *userdata) {
+  return;
+}

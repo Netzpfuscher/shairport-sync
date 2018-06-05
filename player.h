@@ -2,8 +2,10 @@
 #define _PLAYER_H
 
 #include <arpa/inet.h>
+#include <pthread.h>
 
 #include "config.h"
+#include "definitions.h"
 
 #ifdef HAVE_LIBMBEDTLS
 #include <mbedtls/aes.h>
@@ -35,15 +37,27 @@ typedef uint16_t seq_t;
 
 typedef struct audio_buffer_entry { // decoded audio packets
   int ready;
+  int resend_level;
   int64_t timestamp;
   seq_t sequence_number;
+  uint32_t given_timestamp; // for debugging and checking
   signed short *data;
   int length; // the length of the decoded data
 } abuf_t;
 
 // default buffer size
-// needs to be a power of 2 because of the way BUFIDX(seqno) works
-#define BUFFER_FRAMES 512
+// This eeds to be a power of 2 because of the way BUFIDX(seqno) works.
+// 512 is the minimum for normal operation -- it gives 512*352/44100 or just over 4 seconds of
+// buffers.
+// For at least 10 seconds, you need to go to 2048.
+// Resend requests will be spaced out evenly in the latency period, subject to a minimum interval of
+// about 0.25 seconds.
+// Each buffer occupies 352*4 bytes plus about, say, 64 bytes of overhead in various places, say
+// rougly 1,500 bytes per buffer.
+// Thus, 2048 buffers will occupy about 3 megabytes -- no big deal in a normal machine but maybe a
+// problem in an embedded device.
+
+#define BUFFER_FRAMES 1024
 
 typedef struct {
   int encrypted;
@@ -52,17 +66,26 @@ typedef struct {
 } stream_cfg;
 
 typedef struct {
-  int connection_number; // for debug ID purposes, nothing else...
+  int connection_number;   // for debug ID purposes, nothing else...
+  int resend_interval;     // this is really just for debugging
+  int AirPlayVersion;      // zero if not an AirPlay session. Used to help calculate latency
+  int64_t latency;         // the actual latency used for this play session
+  int64_t minimum_latency; // set if an a=min-latency: line appears in the ANNOUNCE message; zero
+                           // otherwise
+  int64_t maximum_latency; // set if an a=max-latency: line appears in the ANNOUNCE message; zero
+                           // otherwise
+
   int fd;
   int authorized; // set if a password is required and has been supplied
   stream_cfg stream;
   SOCKADDR remote, local;
   int stop;
   int running;
-  pthread_t thread;
+  pthread_t thread, timer_requester;
 
   // pthread_t *ptp;
   pthread_t *player_thread;
+  pthread_rwlock_t player_thread_lock; // used to control access by "outsiders"
 
   abuf_t audio_buffer[BUFFER_FRAMES];
   int max_frames_per_packet, input_num_channels, input_bit_depth, input_rate;
@@ -70,12 +93,12 @@ typedef struct {
   int max_frame_size_change;
   int64_t previous_random_number;
   alac_file *decoder_info;
-  uint32_t please_stop;
   uint64_t packet_count;
   int connection_state_to_output;
   int player_thread_please_stop;
-  int64_t first_packet_time_to_play, time_since_play_started; // nanoseconds
-                                                              // stats
+  uint64_t first_packet_time_to_play;
+  int64_t time_since_play_started; // nanoseconds
+                                   // stats
   uint64_t missing_packets, late_packets, too_late_packets, resend_requests;
   int decoder_in_use;
   // debug variables
@@ -117,6 +140,7 @@ typedef struct {
   // RTP stuff
   // only one RTP session can be active at a time.
   int rtp_running;
+  uint64_t rtp_time_of_last_resend_request_error_fp;
 
   char client_ip_string[INET6_ADDRSTRLEN]; // the ip string pointing to the client
   char self_ip_string[INET6_ADDRSTRLEN];   // the ip string being used by this program -- it
@@ -131,6 +155,13 @@ typedef struct {
   int control_socket;                 // our local [server] control socket
   int timing_socket;                  // local timing socket
 
+  uint16_t remote_control_port;
+  uint16_t remote_timing_port;
+  uint16_t local_audio_port;
+  uint16_t local_control_port;
+  uint16_t local_timing_port;
+
+  int64_t latency_delayed_timestamp; // this is for debugging only...
   int64_t reference_timestamp;
   uint64_t reference_timestamp_time;
   uint64_t remote_reference_timestamp_time;
@@ -148,7 +179,6 @@ typedef struct {
 
   uint64_t local_to_remote_time_difference; // used to switch between local and remote clocks
 
-  int timing_sender_stop; // for asking the timing-sending thread to stop
   int last_stuff_request;
 
   int64_t play_segment_reference_frame;
@@ -159,16 +189,25 @@ typedef struct {
 
   int play_number_after_flush;
 
+  // remote control stuff. The port to which to send commands is not specified, so you have to use
+  // mdns to find it.
+  // at present, only avahi can do this
+
+  char *dacp_id; // id of the client -- used to find the port to be used
+  //  uint16_t dacp_port;          // port on the client to send remote control messages to, else
+  //  zero
+  uint32_t dacp_active_remote; // key to send to the remote controller
+  void *dapo_private_storage;  // this is used for compatibility, if dacp stuff isn't enabled.
 } rtsp_conn_info;
 
 int player_play(rtsp_conn_info *conn);
-void player_stop(rtsp_conn_info *conn);
+int player_stop(rtsp_conn_info *conn);
 
 void player_volume(double f, rtsp_conn_info *conn);
+void player_volume_without_notification(double f, rtsp_conn_info *conn);
 void player_flush(int64_t timestamp, rtsp_conn_info *conn);
-void player_put_packet(seq_t seqno, int64_t timestamp, uint8_t *data, int len,
-                       rtsp_conn_info *conn);
-
+void player_put_packet(seq_t seqno, uint32_t actual_timestamp, int64_t timestamp, uint8_t *data,
+                       int len, rtsp_conn_info *conn);
 int64_t monotonic_timestamp(uint32_t timestamp,
                             rtsp_conn_info *conn); // add an epoch to the timestamp. The monotonic
 // timestamp guaranteed to start between 2^32 2^33

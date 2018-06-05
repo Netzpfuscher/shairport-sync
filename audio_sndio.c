@@ -33,7 +33,7 @@ static int init(int, char **);
 static void onmove_cb(void *, int);
 static void deinit(void);
 static void start(int, int);
-static void play(short[], int);
+static void play(void *, int);
 static void stop(void);
 static void onmove_cb(void *, int);
 static int delay(long *);
@@ -82,7 +82,8 @@ static struct sndio_formats formats[] = {{"S8", SPS_FORMAT_S8, 8, 1, 1, SIO_LE_N
 static void help() { printf("    -d output-device    set the output device [default*|...]\n"); }
 
 static int init(int argc, char **argv) {
-  int i, found, opt, round, rate, bufsz;
+  int found, opt, round, rate, bufsz;
+  unsigned int i;
   const char *devname, *tmp;
 
   // set up default values first
@@ -210,7 +211,8 @@ static void deinit() {
   pthread_mutex_unlock(&sndio_mutex);
 }
 
-static void start(int sample_rate, int sample_format) {
+static void start(__attribute__((unused)) int sample_rate,
+                  __attribute__((unused)) int sample_format) {
   pthread_mutex_lock(&sndio_mutex);
   if (!sio_start(hdl))
     die("sndio: unable to start");
@@ -220,7 +222,7 @@ static void start(int sample_rate, int sample_format) {
   pthread_mutex_unlock(&sndio_mutex);
 }
 
-static void play(short buf[], int frames) {
+static void play(void *buf, int frames) {
   if (frames > 0) {
     pthread_mutex_lock(&sndio_mutex);
     written += sio_write(hdl, buf, frames * framesize);
@@ -236,7 +238,7 @@ static void stop() {
   pthread_mutex_unlock(&sndio_mutex);
 }
 
-static void onmove_cb(void *arg, int delta) {
+static void onmove_cb(__attribute__((unused)) void *arg, int delta) {
   time_of_last_onmove_cb = get_absolute_time_in_fp();
   at_least_one_onmove_cb_seen = 1;
   played += delta;
